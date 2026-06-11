@@ -1,7 +1,8 @@
 from google import genai
-from config import GEMINI_API_KEY, TELEGRAM_TOKEN
+from config import GEMINI_API_KEY, TELEGRAM_TOKEN, DATABASE_URL
 
-import pandas as pd
+# 1. Import necessary libraries
+import psycopg2
 import os
 import json
 import re
@@ -12,23 +13,19 @@ from dateutil import parser
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# 🔹 Gemini client
+#Gemini client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 🔹 Excel file
-FILE = "expenses.xlsx"
-
-# 🔹 Allowed categories
+#Allowed categories
 CATEGORIES = ["food", "transport", "bills", "shopping", "others"]
 
 
-# 🔥 1. FIXED DATE PARSER (no amount confusion)
+#1. FIXED DATE PARSER
 def resolve_date(text):
     text = text.lower()
     today = datetime.now()
 
     try:
-        # 🔥 Remove standalone numbers (prevents 2500 → year bug)
         cleaned_text = re.sub(r"\b\d+\b", "", text)
 
         if "yesterday" in cleaned_text:
@@ -42,7 +39,6 @@ def resolve_date(text):
         if "today" in cleaned_text:
             return today.strftime("%Y-%m-%d")
 
-        # Only parse if month words exist
         if any(word in cleaned_text for word in [
             "jan","feb","mar","apr","may","jun",
             "jul","aug","sep","oct","nov","dec"
@@ -56,7 +52,7 @@ def resolve_date(text):
         return today.strftime("%Y-%m-%d")
 
 
-# 🔹 2. Gemini parsing
+#2. Gemini parsing
 def parse_expense(text):
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite-preview",
@@ -76,7 +72,7 @@ def parse_expense(text):
     return response.text
 
 
-# 🔹 3. Clean JSON
+#3. Clean JSON
 def clean_json(text):
     try:
         json_text = re.search(r"\{.*\}", text, re.DOTALL).group()
@@ -85,7 +81,7 @@ def clean_json(text):
         return None
 
 
-# 🔥 4. Standardize + validate
+#4. Standardize + validate
 def standardize_data(data, user_text):
     if not data:
         return None
@@ -95,7 +91,6 @@ def standardize_data(data, user_text):
 
     name = str(data["name"]).lower()
     amount = float(data["amount"])
-
     category = str(data.get("category", "")).lower()
 
     if category not in CATEGORIES:
@@ -118,20 +113,41 @@ def standardize_data(data, user_text):
     }
 
 
-# 🔹 5. Save to Excel
-def save_to_excel(data):
-    df_new = pd.DataFrame([data], columns=["category", "name", "amount", "date"])
+#5. Save to Neon PostgreSQL
+def save_to_db(data):
+    try:
+        # Establish connection to Neon
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
 
-    if os.path.exists(FILE):
-        df = pd.read_excel(FILE)
-        df = pd.concat([df, df_new], ignore_index=True)
-    else:
-        df = df_new
+        # Automatically create the transactions table if it's missing
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id SERIAL PRIMARY KEY,
+                category VARCHAR(50),
+                name VARCHAR(255),
+                amount DECIMAL(10, 2),
+                date DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    df.to_excel(FILE, index=False)
+        # Insert entry
+        cur.execute("""
+            INSERT INTO transactions (category, name, amount, date)
+            VALUES (%s, %s, %s, %s)
+        """, (data['category'], data['name'], data['amount'], data['date']))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"❌ Database error: {e}")
+        return False
 
 
-# 🔹 6. Telegram handler
+#6. Telegram handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
@@ -140,26 +156,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = standardize_data(raw_data, user_text)
 
     if data:
-        save_to_excel(data)
-
-        reply = (
-            f"✅ Saved\n"
-            f"📌 {data['name']}\n"
-            f"💰 ₱{data['amount']}\n"
-            f"📂 {data['category']}\n"
-            f"📅 {data['date']}"
-        )
+        db_success = save_to_db(data) # 🔥 Call the database insert function
+        
+        if db_success:
+            reply = (
+                f"✅ Saved to Database\n"
+                f"📌 {data['name']}\n"
+                f"💰 ₱{data['amount']}\n"
+                f"📂 {data['category']}\n"
+                f"📅 {data['date']}"
+            )
+        else:
+            reply = "⚠️ Connected to bot, but failed to save to the database."
     else:
         reply = "❌ Please include at least a name and amount (e.g. coffee 120)"
 
     await update.message.reply_text(reply)
 
 
-# 🔹 7. Run bot
+#7. Run bot
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🤖 Bot running...")
+    print("🤖 Bot running locally and connected to Neon PostgreSQL...")
     app.run_polling()
