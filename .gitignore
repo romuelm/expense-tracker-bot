@@ -2,4 +2,4 @@ config.py
 venv/
 __pycache__/
 *.pyc
-expenses.xlsx
+analytics_expenses.db
