@@ -96,9 +96,9 @@ def standardize_data(data, user_text):
     if category not in CATEGORIES:
         if any(x in name for x in ["coffee", "jollibee", "food", "meal"]):
             category = "food"
-        elif any(x in name for x in ["grab", "ride", "taxi"]):
+        elif any(x in name for x in ["grab", "ride", "taxi", "bus", "jeep", "tricycle"]):
             category = "transport"
-        elif any(x in name for x in ["rent", "electric", "bill"]):
+        elif any(x in name for x in ["rent", "electric", "bill", "gas", "load"]):
             category = "bills"
         else:
             category = "others"
