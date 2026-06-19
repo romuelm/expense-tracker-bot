@@ -1,5 +1,16 @@
+# Secrets
 config.py
+.env
+
+# Virtual Environments
 venv/
+
+# Python Cache
 __pycache__/
 *.pyc
-analytics_expenses.db
+
+# Local Databases
+*.db
+
+# Airflow Generated Files
+logs/

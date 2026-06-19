@@ -1,26 +1,27 @@
 import psycopg2
 import sqlite3
-from dags.config import DATABASE_URL
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python import PythonOperator
 
-# This is the name of the file that will be created on your PC
-LOCAL_DB = "analytics_expenses.db"
+# Import from config (Ensure config.py is inside the dags folder)
+from config import DATABASE_URL
 
-def run_etl():
+# Save inside Docker's mapped dags folder so it syncs back to Windows
+LOCAL_DB = "/opt/airflow/dags/analytics_expenses.db"
+
+def execute_etl():
     try:
-        # 1. Connect to Neon (Cloud)
         neon_conn = psycopg2.connect(DATABASE_URL)
         neon_cur = neon_conn.cursor()
         
-        # 2. Connect to SQLite (Local)
         sqlite_conn = sqlite3.connect(LOCAL_DB)
         sqlite_cur = sqlite_conn.cursor()
-        
     except Exception as e:
         print(f"❌ Connection Error: {e}")
         return
 
     try:
-        # 3. Create Local Table if it's missing
         sqlite_cur.execute("""
             CREATE TABLE IF NOT EXISTS analytics_expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +35,6 @@ def run_etl():
         """)
         sqlite_conn.commit()
 
-        # 4. Fetch New Rows from Neon
         neon_cur.execute("SELECT id, category, name, amount, date FROM transactions;")
         rows = neon_cur.fetchall()
         
@@ -44,11 +44,8 @@ def run_etl():
 
         print(f"📥 Fetched {len(rows)} transactions from Neon.")
 
-        # 5. Append Rows to Local SQLite (With Decimal & Date fixes!)
         for row in rows:
-            # We convert amount to float, and wrap the date in str() to prevent warnings
             clean_row = (row[0], row[1], row[2], float(row[3]), str(row[4]))
-            
             sqlite_cur.execute("""
                 INSERT INTO analytics_expenses (cloud_id, category, name, amount, date)
                 VALUES (?, ?, ?, ?, ?)
@@ -57,9 +54,7 @@ def run_etl():
         sqlite_conn.commit()
         print("💾 Successfully appended records to local SQLite database.")
 
-        # 6. Purge the Neon Database Table
         ids_to_delete = tuple(row[0] for row in rows)
-        
         if len(ids_to_delete) == 1:
             neon_cur.execute(f"DELETE FROM transactions WHERE id = {ids_to_delete[0]};")
         else:
@@ -74,12 +69,30 @@ def run_etl():
         neon_conn.rollback()
         
     finally:
-        # 7. Close everything safely
         neon_cur.close()
         neon_conn.close()
         sqlite_cur.close()
         sqlite_conn.close()
 
-if __name__ == "__main__":
-    print("🚀 Starting local ETL sync...")
-    run_etl()
+# Define the Airflow DAG Configuration
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2026, 6, 18),
+    'retries': 1,
+    'retry_delay': timedelta(minutes=1),
+}
+
+# This runs the script automatically every day at midnight ('@daily')
+with DAG(
+    'expense_etl_pipeline',
+    default_args=default_args,
+    description='Extracts expenses from Neon and loads to local SQLite',
+    schedule_interval='30 12 * * *',
+    catchup=False
+) as dag:
+
+    etl_task = PythonOperator(
+        task_id='run_neon_to_sqlite',
+        python_callable=execute_etl,
+    )

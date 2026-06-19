@@ -1,5 +1,5 @@
 from google import genai
-from config import GEMINI_API_KEY, TELEGRAM_TOKEN, DATABASE_URL
+from dags.config import GEMINI_API_KEY, TELEGRAM_TOKEN, DATABASE_URL
 
 # 1. Import necessary libraries
 import psycopg2
