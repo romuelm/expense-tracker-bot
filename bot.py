@@ -61,11 +61,15 @@ def parse_expense(text):
 
         "{text}"
 
+        Categorize the expense into EXACTLY one of these options: 
+        ["food", "transport", "bills", "shopping", "others"]
+        *Note: Coffee, matcha, drinks, Cafe, tea, and meals all belong to "food".
+
         Return ONLY JSON:
         {{
             "name": "string",
             "amount": number,
-            "category": "optional"
+            "category": "string"
         }}
         """
     )
@@ -94,11 +98,11 @@ def standardize_data(data, user_text):
     category = str(data.get("category", "")).lower()
 
     if category not in CATEGORIES:
-        if any(x in name for x in ["coffee", "jollibee", "food", "meal"]):
+        if any(x in name for x in ["coffee", "jollibee", "food", "meal", "drinks", "Cafe", "matcha", "tea"]):
             category = "food"
-        elif any(x in name for x in ["grab", "ride", "taxi", "bus", "jeep", "tricycle"]):
+        elif any(x in name for x in ["grab", "ride", "taxi", "bus", "jeep", "tricycle", "gas", "train"]):
             category = "transport"
-        elif any(x in name for x in ["rent", "electric", "bill", "gas", "load"]):
+        elif any(x in name for x in ["rent", "electric", "bill", "load"]):
             category = "bills"
         else:
             category = "others"
