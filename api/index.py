@@ -6,12 +6,11 @@ import re
 from datetime import datetime, timedelta
 from dateutil import parser
 
-# 🔥 NEW: Import FastAPI
 from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# Load configuration from environment variables (Required for Vercel)
+# Load configuration from environment variables
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -22,7 +21,6 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # Allowed categories
 CATEGORIES = ["food", "transport", "bills", "shopping", "others"]
 
-# 🔥 NEW: Initialize FastAPI app
 app = FastAPI()
 
 # 1. FIXED DATE PARSER
@@ -85,7 +83,6 @@ def standardize_data(data, user_text):
     amount = float(data["amount"])
     category = str(data.get("category", "")).lower()
 
-    # Fallback if Gemini hallucinates a category outside your list
     if category not in CATEGORIES:
         category = "others"
         
@@ -119,9 +116,8 @@ def save_to_db(data):
         print(f"❌ Database error: {e}")
         return False
 
-# 6. Telegram handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
+# 6. Core processing logic
+async def process_text(user_text):
     result = parse_expense(user_text)
     raw_data = clean_json(result)
     data = standardize_data(raw_data, user_text)
@@ -129,7 +125,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data:
         db_success = save_to_db(data) 
         if db_success:
-            reply = (
+            return (
                 f"✅ Saved to Database\n"
                 f"📌 {data['name']}\n"
                 f"💰 ₱{data['amount']}\n"
@@ -137,28 +133,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📅 {data['date']}"
             )
         else:
-            reply = "⚠️ Connected to bot, but failed to save to the database."
+            return "⚠️ Connected to bot, but failed to save to the database."
     else:
-        reply = "❌ Please include at least a name and amount (e.g. coffee 120)"
-    await update.message.reply_text(reply)
+        return "❌ Please include at least a name and amount (e.g. coffee 120)"
 
-# 🔥 NEW: Section 7 - Webhook and App Setup for Vercel
-# Initialize python-telegram-bot application globally
-telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-@app.on_event("startup")
-async def startup_event():
-    # Initialize the telegram app when the FastAPI server starts
-    await telegram_app.initialize()
-
+# 7. Webhook Route for Vercel
 @app.post("/api/index")
 async def webhook(request: Request):
-    # This route receives the JSON payload from Telegram when a message is sent
-    data = await request.json()
-    update = Update.de_json(data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return {"status": "ok"}
+    try:
+        body = await request.json()
+        update = Update.de_json(body, None)
+        
+        if update and update.message and update.message.text:
+            chat_id = update.message.chat_id
+            user_text = update.message.text
+            
+            # Skip commands if any
+            if not user_text.startswith('/'):
+                reply_message = await process_text(user_text)
+                
+                # Send reply back via Telegram Bot API
+                from telegram import Bot
+                bot = Bot(token=TELEGRAM_TOKEN)
+                await bot.send_message(chat_id=chat_id, text=reply_message)
+                
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/")
 async def root():
