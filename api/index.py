@@ -53,11 +53,15 @@ def parse_expense(text):
         contents=f"""
         Extract expense data from this message:
         "{text}"
+        
+        Categorize the expense into EXACTLY ONE of these categories: food, transport, bills, shopping, others.
+        If the user explicitly states a category in their message, prioritize using that category.
+        
         Return ONLY JSON:
         {{
             "name": "string",
             "amount": number,
-            "category": "optional"
+            "category": "string"
         }}
         """
     )
@@ -81,15 +85,10 @@ def standardize_data(data, user_text):
     amount = float(data["amount"])
     category = str(data.get("category", "")).lower()
 
+    # Fallback if Gemini hallucinates a category outside your list
     if category not in CATEGORIES:
-        if any(x in name for x in ["coffee", "jollibee", "food", "meal"]):
-            category = "food"
-        elif any(x in name for x in ["grab", "ride", "taxi", "bus", "jeep", "tricycle"]):
-            category = "transport"
-        elif any(x in name for x in ["rent", "electric", "bill", "gas", "load"]):
-            category = "bills"
-        else:
-            category = "others"
+        category = "others"
+        
     date = resolve_date(user_text)
     return {"category": category, "name": name, "amount": amount, "date": date}
 
